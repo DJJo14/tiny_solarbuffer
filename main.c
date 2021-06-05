@@ -10,6 +10,8 @@
 //#undef __AVR_ATmega16__
 //#define __AVR_ATtiny85__
 //debug with: avarice --dragon --debugwire --part attiny85 :1212
+//extra info: http://avr-eclipse.sourceforge.net/wiki/index.php?title=Debugging&oldid=874
+// connect with ISP on dragon
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
