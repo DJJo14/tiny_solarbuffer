@@ -9,6 +9,7 @@
 //==========================================================================================
 //#undef __AVR_ATmega16__
 //#define __AVR_ATtiny85__
+//debug with: avarice --dragon --debugwire --part attiny85 :1212
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
