@@ -23,6 +23,7 @@
 #include "main.h"
 #include "smalltask.h"
 #include "hardware.h"
+#include <avr/sleep.h>
 
 //==========================================================================================
 // Definitions
@@ -45,14 +46,18 @@
 //==========================================================================================
 // Global Values
 //==========================================================================================
-uint8_t state = STATE_STARTINGUP;
-uint8_t led_state = LED_OFF;
+volatile uint8_t state_caps;
+volatile uint8_t led_state = LED_OFF;
 //uint8_t EEMEM EE_mode = 1;
 //bool startup = true;
 //==========================================================================================
 // Interrupts
 //==========================================================================================
+ISR(WDT_vect)
+{
+	WDTCR |= _BV(WDIE);
 
+}
 
 //==========================================================================================
 // Internal Functions
@@ -64,10 +69,20 @@ static void init_adc( void )
 	DIDR0 = (1<<ADC3D);
 }
 
+static void init_watchdog( void )
+{
+	MCUSR &= ~(1<<WDRF);
+	// start timed sequence
+	WDTCR |= (1<<WDCE) | (1<<WDE);
+	// set new watchdog timeout value
+	WDTCR = (1<<WDP2) | (0<<WDP1) | (0<<WDP0) | (1<<WDIE); //(1<<WDCE) | s
+//	WDTCR |= _BV(WDIE);
+}
+
 static void init( void )
 {
 	DDRB = SYSTEM_DDR;
-	PORTB = 0;//(1<<DDB5);
+	PORTB = LED_OUTPUT;//(1<<DDB5);
 	//do this to lower the Fcpu
 //	CLKPR = (1<<CLKPCE);
 //	CLKPR = (1<<CLKPS1) | (1<<CLKPS0);
@@ -79,19 +94,35 @@ static void init( void )
 //		mode = 1;
 //	}
 	Smalltask_init();
+	init_watchdog();
 	init_adc();
+	state_caps = STATE_STARTINGUP;
 	sei();	// __enable_interrupt();
 
 
 }
 
 
-static void set_led_state( uint8_t state )
+static void set_led_state( uint8_t mode )
 {
 	if (led_state == LED_OFF)
-		led_state = state;
+		led_state = mode;
 }
 
+static void go_to_sleep( void )
+{
+	ADCSRA &= ~ADEN;
+//	PORTB = 0;
+//	DDRB = 0;
+//	init_watchdog();
+	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+//	sleep_enable();
+	sleep_mode();
+	///ZZZZZZzzzzz
+//	sleep_disable();
+	ADCSRA |= ADEN;
+
+}
 //==========================================================================================
 // Main
 //==========================================================================================
@@ -140,7 +171,7 @@ void Led_blink( void )
 	{
 		led_state = LED_OFF;
 		PORTB &= ~LED_OUTPUT;
-		Smalltask_rerun(TASK_Led_blink, 2000);
+		Smalltask_rerun(TASK_Led_blink, 1000);
 		return;
 	}
 	if( led_state == LED_RUNNING )
@@ -148,7 +179,7 @@ void Led_blink( void )
 		count -= 1;
 		PORTB ^= LED_OUTPUT;
 	}
-	Smalltask_rerun(TASK_Led_blink, 500);
+	Smalltask_rerun(TASK_Led_blink, 200);
 }
 
 void button( void )
@@ -203,66 +234,80 @@ void adc_task( void )
 	ADCSRA |= (1<<ADSC);
 	while (ADCSRA & (1<<ADSC));
 	temp = (uint16_t)((uint32_t) ADCW * 1595 / 1024);
-
+//	PORTB ^= LED_OUTPUT;
 //	if (cap_voltage > 1000)
 //		PORTB ^= LED_OUTPUT;
-	if (state == STATE_STARTINGUP)
+	if (state_caps == STATE_STARTINGUP)
 	{
 		if (temp < VOLTAGE_EMPTY)
 		{
-			state = STATE_EMPTY;
+			state_caps = STATE_EMPTY;
 			set_led_state(LED_EMPLY);
 		}
 		else if ( temp > VOLTAGE_FULL )
 		{
-			state = STATE_DISCHARGING;
+			state_caps = STATE_DISCHARGING;
 			set_led_state(LED_FULL);
 			PORTB |= USB_OUTPUT;
 		}
-		else
+		else if (led_state == LED_OFF)
 		{
-			state = STATE_DISCHARGING;
+			state_caps = STATE_DISCHARGING;
 			set_led_state(LED_UP);
+			PORTB |= USB_OUTPUT;
 		}
 //		cap_voltage = temp;
 	}
-	else if (state == STATE_DISCHARGING)
+	else if (state_caps == STATE_DISCHARGING)
 	{
 		if (temp < VOLTAGE_CHARGING)
 		{
-			state = STATE_CHARGING;
+			state_caps = STATE_CHARGING;
 			set_led_state(LED_UP);
 			PORTB &= ~USB_OUTPUT;
 		}
-		Smalltask_rerun(TASK_adc_task, 250);
-		return;
+		else if (led_state == LED_OFF)
+		{
+			Smalltask_rerun(TASK_adc_task, 1);
+			go_to_sleep();
+			return;
+		}
 	}
-	else if (state == STATE_CHARGING)
+	else if (state_caps == STATE_CHARGING)
 	{
 		if (temp > VOLTAGE_FULL)
 		{
-			state = STATE_DISCHARGING;
+			state_caps = STATE_DISCHARGING;
 			set_led_state(LED_DOWN);
 			PORTB |= USB_OUTPUT;
 		}
 		else if (temp < VOLTAGE_EMPTY)
 		{
-			state = STATE_EMPTY;
+			state_caps = STATE_EMPTY;
 			set_led_state(LED_EMPLY);
 		}
-		Smalltask_rerun(TASK_adc_task, 1000);
-		return;
+		else if (led_state == LED_OFF)
+		{
+			Smalltask_rerun(TASK_adc_task, 1);
+			go_to_sleep();
+			return;
+		}
 	}
-	else if (state == STATE_EMPTY)
+	else if (state_caps == STATE_EMPTY)
 	{
 		if (temp > VOLTAGE_CHARGING)
 		{
-			state = STATE_DISCHARGING;
+			state_caps = STATE_DISCHARGING;
 			set_led_state(LED_UP);
 		}
-		Smalltask_rerun(TASK_adc_task, 2000);
-		return;
+		else if (led_state == LED_OFF)
+		{
+			Smalltask_rerun(TASK_adc_task, 1);
+			go_to_sleep();
+			return;
+		}
+
 	}
 
-	Smalltask_rerun(TASK_adc_task, 1000);
+	Smalltask_rerun(TASK_adc_task, 250);
 }
